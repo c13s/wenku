@@ -1,0 +1,138 @@
+---
+layout: post
+title: Install Blacklight 4.2 with an external Solr 4.3.1 instance running on a Tomcat
+  server
+categories:
+- Solr/Blacklight
+tags:
+- Blacklight
+- Solr
+status: publish
+type: post
+published: true
+meta:
+  _encloseme: '1'
+  _sd_is_markdown: '1'
+  _pingme: '1'
+  _wp-svbtle-kudos: '4'
+---
+<p>The default blacklight 4.2 installation can set up a solr instance included in a jetty embedded server. However, it's less ideal for any production scenario than for a development environment. This article explains how to install a solr instance on an external tomcat server and use it with Blacklight. It uses the most recent version of solr (4.3.1), rather than solr 4.0, which is the default in Blacklight 4.2. 
+
+It's tested on the following environment: </p>
+
+<ul><li>Linux: Ubuntu server 12.04</li><li>Java: JDK 1.7.0</li><li>Ruby: 1.9.3</li><li>Rails: 4.0.0</li></ul>
+
+<p>To be installed: </p>
+
+<ul><li>Tomcat 6.0</li><li>Solr 4.3.1</li><li>Blacklight 4.2</li></ul>
+
+<p>All files are kept in the same directory: <code>/opt/blacklight4</code>. </p>
+
+<h3>Install Tomcat</h3>
+
+<pre><code>cd /opt/blacklight4
+curl -O http://www.globalish.com/am/tomcat/tomcat-6/v6.0.37/bin/apache-tomcat-6.0.37.tar.gz
+tar xzf apache-tomcat-6.0.37.tar.gz
+ln -s apache-tomcat-6.0.37 tomcat
+</code></pre>
+
+<h3>Install Solr</h3>
+
+<pre><code>curl -O http://mirror.cc.columbia.edu/pub/software/apache/lucene/solr/4.3.1/solr-4.3.1.tgz
+tar xzf solr-4.3.1.tgz
+cp solr-4.3.1/dist/solr-4.3.1.war tomcat/webapps/solr.war
+
+# make a solr instance using one of the solr example configuration
+mkdir /opt/blacklight4/solr4
+cp -r /opt/blacklight4/solr-4.3.1/example/solr/* /opt/blacklight4/solr4
+
+# Copy slf4j jar files and log.properties to tomcat
+cp /opt/blacklight4/solr-4.3.1/example/lib/ext/*.jar /opt/blacklight4/tomcat/lib
+# this step will let solr write logs to /opt/blacklight4/tomcat/logs/solr.log
+cp /opt/blacklight4/solr-4.3.1/example/resources/log4j.properties /opt/blacklight4/tomcat/lib
+
+# Set solr home for tomcat
+echo 'JAVA_OPTS="$JAVA_OPTS -Dsolr.solr.home=/opt/blacklight4/solr4/"' &gt;&gt; /opt/blacklight4/tomcat/bin/setenv.sh
+</code></pre>
+
+<p>After tomcat is started, </p>
+
+<pre><code>tomcat/bin/startup.sh
+</code></pre>
+
+<p>solr should be running at http://localhost:8080/solr/</p>
+
+<h3>Install Blacklight 4.2</h3>
+
+<p>Follow the blacklight 4.2 <a href="https://github.com/projectblacklight/blacklight/wiki/Quickstart">quick start guide</a> to install a solr instance. Stop after step 5 of the quick start guide. This will setup blacklight with a Jetty-based solr instance, from which we can copy configuration files. </p>
+
+<pre><code>cd /opt/blacklight4
+rails new blacklight4
+cd blacklight4
+rm public/index.html
+echo "gem 'blacklight'" &gt;&gt; Gemfile
+echo "gem 'therubyracer'" &gt;&gt; Gemfile
+bundle install
+# Note! you might need to run bundle install again to install unicode gem
+rails generate blacklight
+rake db:migrate
+rails generate blacklight:jetty
+</code></pre>
+
+<h3>Configure Blacklight Solr index</h3>
+
+<p>Now move the solr configuration from the Jetty server in Blacklight directory to our solr instance at <code>/opt/blacklight4/solr4</code>. </p>
+
+<pre><code>cp -r /opt/blacklight4/blacklight4/jetty/solr/blacklight-core /opt/blacklight4/solr4/
+</code></pre>
+
+<p>We need to copy some Java libraries from solr-4.3.1 in order for the external blacklight-core to work. </p>
+
+<pre><code>cd /opt/blacklight4/solr4/blacklight-core
+mkdir lib
+cp /opt/blacklight4/solr-4.3.1/dist/solr-analysis-extras-4.3.1.jar lib
+cp /opt/blacklight4/solr-4.3.1/dist/solr-langid-4.3.1.jar lib
+cp /opt/blacklight4/solr-4.3.1/dist/solr-clustering-4.3.1.jar lib
+cp /opt/blacklight4/solr-4.3.1/dist/solr-velocity-4.3.1.jar lib
+cp -r /opt/blacklight4/solr-4.3.1/contrib .
+</code></pre>
+
+<p>Update <code>blacklight-core/conf/solrconfig.xml</code>, use <a href="https://gist.github.com/anonymous/6011659">one that is modified for solr 4.3.1</a></p>
+
+<pre><code>curl -o conf/solrconfig.xml https://gist.github.com/anonymous/6011659/raw/e5a1ca433daf596e5c075cc1e3e737c0acd7e37a/solrconfig.xml
+</code></pre>
+
+<p>Update solr.xml to add blacklight-core and make it the default collection in the Solr instance.</p>
+
+<pre><code>cd ../
+curl -O https://gist.github.com/anonymous/6011659/raw/eb4ba8216033da1b422bb50cd7c6b46c611d6e8c/solr.xml
+</code></pre>
+
+<p>Restart tomcat and make sure <code>blacklight-core</code> is added as the second core</p>
+
+<pre><code>../tomcat/bin/shutdown.sh; ../tomcat/bin/startup.sh
+</code></pre>
+
+<p>Add Blacklight sample data to the blacklight-core in the external Solr instance </p>
+
+<pre><code>cd /opt/blacklight4/blacklight4
+# change port to use the external Tomcat instead of Jetty
+sed -i 's/8983/8080/' config/solr.yml
+# Load sample data
+rake solr:marc:index_test_data
+</code></pre>
+
+<p>On the blacklight-core solr page at <a href="http://192.168.153.128:8080/solr/#/blacklight-core">http://localhost:8080/solr/#/blacklight-core</a>, there should be 30 docs now. 
+
+You can see it in Blacklight by starting the development environment</p>
+
+<pre><code>rails server -p 3000 -e development
+</code></pre>
+
+<p>and open <a href="http://localhost:3000">http://localhost:3000</a>. </p>
+
+<h3>Summary</h3>
+
+<p>This set up is not that bad if you install a fresh Blacklight with Solr 4.3.1. However, if this also involves upgrading Blacklight from an earlier version, it'll become very complicated. We actually tested upgrading our Solr 1.4 index to Solr 4.3.1, and without upgrading our Blacklight 3.1 to Blacklight 4.x. The Blacklight based site turns out to be OK with a little more touches required on the Blacklight side. We are still figuring out an exact picture of what needs to be updated and what not. <a href="http://bibwild.wordpress.com/2013/06/18/upgrading-a-blacklight-app-from-solr-1-4-to-solr-4-3/trackback">A blog by Jonathan Rochkind</a> is a good reference for those issues. 
+
+Although running Solr on an external Tomcat is a big leap forward, it still doesn't take full advantage of what Solr can offer. Next time I'll discuss how to set up Solr cloud. </p>
